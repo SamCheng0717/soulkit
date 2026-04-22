@@ -1,0 +1,10 @@
+.env
+raw/
+wiki/faq/
+wiki/index.md
+wiki/log.md
+prompts/
+.sync_state.json
+__pycache__/
+*.pyc
+*.jsonl
