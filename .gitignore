@@ -8,3 +8,4 @@ prompts/
 __pycache__/
 *.pyc
 *.jsonl
+chatid.txt

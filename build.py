@@ -17,6 +17,7 @@ llm = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 )
+MODEL = os.getenv("MODEL", "deepseek-chat")
 
 # ── Schema ────────────────────────────────────────────────────────
 def load_schema(base: Path) -> str:
@@ -97,14 +98,13 @@ def fmt(msgs: list) -> str:
     )
 
 def call(prompt: str, json_mode=True) -> str:
-    kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     r = llm.chat.completions.create(
-        model="deepseek-chat",
+        model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1 if json_mode else 0.4,
-        **kwargs,
+        max_tokens=2048 if json_mode else 4096,
     )
-    return r.choices[0].message.content.strip()
+    return (r.choices[0].message.content or "").strip()
 
 # ── Pass 1：加载会话 ──────────────────────────────────────────────
 def load_sessions(csv_path: str) -> dict[str, list]:
@@ -143,7 +143,7 @@ def write_faq(entry: dict, base: Path) -> bool:
     return True
 
 def pass_compile(sessions: dict, base: Path, schema: str, workers=8) -> int:
-    print("\n📚 Pass 2 · 提取知识库 FAQ")
+    print("\n[Pass 2] 提取知识库 FAQ")
     written = 0
     items   = list(sessions.items())
 
@@ -171,7 +171,7 @@ def score_session(msgs: list) -> float:
         return 0.0
 
 def pass_distill(sessions: dict, base: Path, workers=8):
-    print("\n🧬 Pass 3 · 蒸馏 SOUL.md")
+    print("\n[Pass 3] 蒸馏 SOUL.md")
     items = list(sessions.items())
 
     print(f"  评分 {len(items)} 条会话...")
@@ -190,7 +190,7 @@ def pass_distill(sessions: dict, base: Path, workers=8):
     print(f"  → 选出 {len(top)} 条高质量对话（score ≥ 0.70）")
 
     if len(top) < 3:
-        print("  ⚠️  样本不足，跳过 SOUL.md（建议至少 15 条会话）")
+        print("  ! 样本不足，跳过 SOUL.md（建议至少 15 条会话）")
         return
 
     sample = "\n\n".join(
@@ -203,7 +203,7 @@ def pass_distill(sessions: dict, base: Path, workers=8):
 
 # ── Pass 4：index.md + log.md ─────────────────────────────────────
 def pass_meta(csv_path: str, faq_written: int, total: int, base: Path):
-    print("\n📋 Pass 4 · 更新索引与日志")
+    print("\n[Pass 4] 更新索引与日志")
 
     lines = [f"# Wiki Index\n\n> 更新于 {date.today()}\n\n## FAQ\n\n"]
     for md in sorted((base / "wiki" / "faq").glob("*.md")):
@@ -247,11 +247,11 @@ def main():
             schema_dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     schema = load_schema(base)
 
-    print(f"{'━'*52}")
+    print(f"{'='*52}")
     print(f"  cs-agent  |  {Path(args.csv).name}")
-    print(f"{'━'*52}")
+    print(f"{'='*52}")
 
-    print("\n📖 Pass 1 · 加载会话")
+    print("\n[Pass 1] 加载会话")
     sessions = load_sessions(args.csv)
     print(f"  → {len(sessions)} 条会话")
 
@@ -262,14 +262,14 @@ def main():
     soul_ok   = (base / "prompts" / "SOUL.md").exists()
     total_faq = len(list((base / "wiki" / "faq").glob("*.md")))
 
-    print(f"\n{'━'*52}")
-    print(f"  ✓ 知识库   wiki/faq/        {total_faq} 个页面")
-    print(f"  {'✓' if soul_ok else '✗'} 人格      prompts/SOUL.md")
-    print(f"  ✓ 索引     wiki/index.md")
-    print(f"  ✓ 日志     wiki/log.md")
-    print(f"{'━'*52}")
+    print(f"\n{'='*52}")
+    print(f"  [ok] 知识库   wiki/faq/        {total_faq} 个页面")
+    print(f"  [{'ok' if soul_ok else '--'}] 人格      prompts/SOUL.md")
+    print(f"  [ok] 索引     wiki/index.md")
+    print(f"  [ok] 日志     wiki/log.md")
+    print(f"{'='*52}")
     print(f"  下一步: python sync.py")
-    print(f"{'━'*52}\n")
+    print(f"{'='*52}\n")
 
 if __name__ == "__main__":
     main()

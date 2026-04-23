@@ -18,11 +18,15 @@ cp .env.example .env   # 填入 API Key
 ## 使用
 
 ```bash
-# 把聊天记录放进 raw/
+# 方式 A：从数据库直接导出（OceanBase / MySQL）
+python export.py                        # 默认输出 raw/chatlogs.csv
+python export.py --limit 500            # 调试时只导出 500 条
+
+# 方式 B：手动准备 CSV，放进 raw/
 cp your_chatlogs.csv raw/
 
 # 生成知识库 + 人格（约 5-15 分钟，取决于数据量）
-python build.py raw/your_chatlogs.csv
+python build.py raw/chatlogs.csv
 
 # 推送到 Dify
 python sync.py
