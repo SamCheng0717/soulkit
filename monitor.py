@@ -91,3 +91,28 @@ def format_dialogue(messages: list[dict]) -> str:
         if m.get("answer"):
             lines.append(f"[AI] {m['answer']}")
     return "\n".join(lines)
+
+
+# ── 留资检测 (Qwen3-14B 本地) ──────────────────────────────────────────────
+CONVERSION_PROMPT = """\
+以下是一段客服对话，判断顾客是否留下了微信号或手机号。
+只回答 JSON：{{"留资": true}} 或 {{"留资": false}}
+
+对话：
+{dialogue}"""
+
+
+def detect_conversion(dialogue: str) -> bool:
+    """用本地 Qwen3-14B 判断对话是否有顾客留资。"""
+    r = llm_local.chat.completions.create(
+        model=LOCAL_MODEL,
+        messages=[{"role": "user", "content": CONVERSION_PROMPT.format(dialogue=dialogue)}],
+        temperature=0.1,
+        max_tokens=20,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    text = (r.choices[0].message.content or "").strip()
+    try:
+        return bool(json.loads(text).get("留资", False))
+    except Exception:
+        return "true" in text.lower()

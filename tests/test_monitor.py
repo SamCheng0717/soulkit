@@ -44,5 +44,32 @@ class TestDifyClient(unittest.TestCase):
         self.assertEqual(result[0]["id"], "new1")
 
 
+class TestConversionDetection(unittest.TestCase):
+
+    @patch("monitor.llm_local")
+    def test_detect_conversion_true(self, mock_llm):
+        from monitor import detect_conversion
+        mock_llm.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content='{"留资": true}'))
+        ]
+        self.assertTrue(detect_conversion("[顾客] 我微信是 abc123"))
+
+    @patch("monitor.llm_local")
+    def test_detect_conversion_false(self, mock_llm):
+        from monitor import detect_conversion
+        mock_llm.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content='{"留资": false}'))
+        ]
+        self.assertFalse(detect_conversion("[顾客] 超声刀多少钱"))
+
+    @patch("monitor.llm_local")
+    def test_detect_conversion_fallback_on_bad_json(self, mock_llm):
+        from monitor import detect_conversion
+        mock_llm.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content="true"))
+        ]
+        self.assertTrue(detect_conversion("任意对话"))
+
+
 if __name__ == "__main__":
     unittest.main()
