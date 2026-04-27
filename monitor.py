@@ -35,6 +35,7 @@ STATS   = REPORTS / "stats.json"
 # ── Dify API ──────────────────────────────────────────────────────────────
 def fetch_conversations(since: datetime.datetime) -> list[dict]:
     """拉取 since 之后创建的所有对话（分页）。"""
+    # since 必须是 naive datetime（datetime.datetime.now()），与 fromtimestamp 保持一致
     headers = {"Authorization": f"Bearer {DIFY_KEY}"}
     results, last_id = [], None
     while True:
@@ -77,6 +78,7 @@ def fetch_messages(conv_id: str) -> list[dict]:
             first_id = msgs[0]["id"]
         else:
             break
+    results.reverse()
     return results
 
 
