@@ -178,5 +178,38 @@ class TestDailyReport(unittest.TestCase):
         self.assertNotIn("劣质对话详情", content)
 
 
+class TestWeeklyReport(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def test_weekly_report_shows_trend(self):
+        import monitor as m
+        import datetime
+        from pathlib import Path
+        orig_stats   = m.STATS
+        orig_reports = m.REPORTS
+        m.STATS   = Path(self.tmpdir) / "stats.json"
+        m.REPORTS = Path(self.tmpdir)
+        try:
+            today = datetime.date.today()
+            for i in range(7):
+                day = today - datetime.timedelta(days=6 - i)
+                m.append_stats(day.isoformat(), 80, 20 + i, 5)
+            prev_monday = today - datetime.timedelta(days=today.weekday() + 7)
+            for i in range(7):
+                day = prev_monday + datetime.timedelta(days=i)
+                m.append_stats(day.isoformat(), 80, 15, 8)
+
+            path = m.generate_weekly_report()
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("留资率趋势", content)
+            self.assertIn("↑", content)
+        finally:
+            m.STATS   = orig_stats
+            m.REPORTS = orig_reports
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -208,3 +208,51 @@ def generate_daily_report(date: str, results: list[dict], threshold: float = 0.6
     out = REPORTS / f"{date}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
+
+
+# ── 周报 ────────────────────────────────────────────────────────────────────
+def generate_weekly_report() -> Path:
+    stats = load_stats()
+    today = datetime.date.today()
+    monday    = today - datetime.timedelta(days=today.weekday())
+    sunday    = monday + datetime.timedelta(days=6)
+    prev_mon  = monday - datetime.timedelta(days=7)
+    prev_sun  = monday - datetime.timedelta(days=1)
+
+    week_data = [s for s in stats if monday.isoformat() <= s["date"] <= sunday.isoformat()]
+    prev_data = [s for s in stats if prev_mon.isoformat() <= s["date"] <= prev_sun.isoformat()]
+
+    if not week_data:
+        raise ValueError("本周暂无数据，请先运行日报")
+
+    total     = sum(s["total"]     for s in week_data)
+    converted = sum(s["converted"] for s in week_data)
+    rate      = converted / total if total else 0.0
+
+    prev_total     = sum(s["total"]     for s in prev_data)
+    prev_converted = sum(s["converted"] for s in prev_data)
+    prev_rate      = prev_converted / prev_total if prev_total else 0.0
+
+    diff   = rate - prev_rate
+    arrow  = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+    diff_s = f"+{diff*100:.1f}%" if diff > 0 else f"{diff*100:.1f}%"
+
+    lines = [
+        f"# 周报 {monday} ~ {sunday}\n",
+        "## 留资率趋势\n",
+        "| 日期 | 对话量 | 留资量 | 留资率 |",
+        "|------|--------|--------|--------|",
+    ]
+    for s in week_data:
+        lines.append(f"| {s['date']} | {s['total']} | {s['converted']} | {s['rate']*100:.1f}% |")
+    lines.append(f"| **合计** | **{total}** | **{converted}** | **{rate*100:.1f}%** |\n")
+    if prev_data:
+        lines.append(f"趋势：本周留资率较上周 {diff_s} {arrow}\n")
+    else:
+        lines.append("趋势：上周暂无对比数据\n")
+
+    week_num = today.isocalendar()[1]
+    REPORTS.mkdir(exist_ok=True)
+    out = REPORTS / f"week-{today.year}-{week_num:02d}.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
