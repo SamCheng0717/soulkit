@@ -99,5 +99,48 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(result["problems"], [])
 
 
+class TestStats(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def test_append_and_load(self):
+        import monitor as m
+        from pathlib import Path
+        orig_stats  = m.STATS
+        orig_reports = m.REPORTS
+        m.STATS   = Path(self.tmpdir) / "stats.json"
+        m.REPORTS = Path(self.tmpdir)
+
+        try:
+            m.append_stats("2026-04-27", 83, 31, 11)
+            data = m.load_stats()
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["date"], "2026-04-27")
+            self.assertAlmostEqual(data[0]["rate"], 0.373, places=2)
+            self.assertEqual(data[0]["bad"], 11)
+        finally:
+            m.STATS   = orig_stats
+            m.REPORTS = orig_reports
+
+    def test_append_overwrites_same_date(self):
+        import monitor as m
+        from pathlib import Path
+        orig_stats  = m.STATS
+        orig_reports = m.REPORTS
+        m.STATS   = Path(self.tmpdir) / "stats.json"
+        m.REPORTS = Path(self.tmpdir)
+        try:
+            m.append_stats("2026-04-27", 80, 28, 9)
+            m.append_stats("2026-04-27", 83, 31, 11)
+            data = m.load_stats()
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["total"], 83)
+        finally:
+            m.STATS   = orig_stats
+            m.REPORTS = orig_reports
+
+
 if __name__ == "__main__":
     unittest.main()

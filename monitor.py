@@ -149,3 +149,20 @@ def score_conversation(dialogue: str) -> dict:
         return json.loads(text)
     except Exception:
         return {"score": 1.0, "problems": [], "bad_turn": "", "suggestion": ""}
+
+
+# ── 统计持久化 ──────────────────────────────────────────────────────────────
+def load_stats() -> list[dict]:
+    if not STATS.exists():
+        return []
+    return json.loads(STATS.read_text(encoding="utf-8"))
+
+
+def append_stats(date: str, total: int, converted: int, bad: int) -> None:
+    stats = load_stats()
+    stats = [s for s in stats if s["date"] != date]
+    rate  = round(converted / total, 3) if total else 0.0
+    stats.append({"date": date, "total": total, "converted": converted, "rate": rate, "bad": bad})
+    stats.sort(key=lambda x: x["date"])
+    REPORTS.mkdir(exist_ok=True)
+    STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
