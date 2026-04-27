@@ -116,3 +116,36 @@ def detect_conversion(dialogue: str) -> bool:
         return bool(json.loads(text).get("留资", False))
     except Exception:
         return "true" in text.lower()
+
+
+# ── 质量评分 (DeepSeek) ────────────────────────────────────────────────────
+SCORE_PROMPT = """\
+分析以下客服对话，判断 AI 回复质量。
+
+检测信号：
+- 顾客出现负面情绪词（没用/烦/算了/什么破）→ 扣分
+- 顾客重复问同一问题 2+ 次 → 扣分
+- AI 回复后顾客沉默离开 → 扣分
+- AI 回复出现违禁词（我们/案例/知识库/保证）→ 扣分
+- 顾客全程未留微信/电话 → 轻微扣分
+
+输出 JSON（只输出 JSON）：
+{{"score": 0.35, "problems": ["重复追问"], "bad_turn": "AI第3条回复原文", "suggestion": "建议内容"}}
+
+对话：
+{dialogue}"""
+
+
+def score_conversation(dialogue: str) -> dict:
+    """用 DeepSeek 对对话质量打分并生成诊断建议。"""
+    r = llm_ds.chat.completions.create(
+        model=DS_MODEL,
+        messages=[{"role": "user", "content": SCORE_PROMPT.format(dialogue=dialogue)}],
+        temperature=0.1,
+        max_tokens=512,
+    )
+    text = (r.choices[0].message.content or "").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return {"score": 1.0, "problems": [], "bad_turn": "", "suggestion": ""}

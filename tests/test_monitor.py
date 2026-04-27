@@ -71,5 +71,33 @@ class TestConversionDetection(unittest.TestCase):
         self.assertTrue(detect_conversion("任意对话"))
 
 
+class TestScoring(unittest.TestCase):
+
+    @patch("monitor.llm_ds")
+    def test_score_returns_dict(self, mock_llm):
+        from monitor import score_conversation
+        mock_llm.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({
+                "score": 0.35,
+                "problems": ["重复追问"],
+                "bad_turn": "AI第3条",
+                "suggestion": "补充FAQ"
+            })))
+        ]
+        result = score_conversation("[顾客] 多少钱\n[AI] 留个微信\n[顾客] 你没回答")
+        self.assertEqual(result["score"], 0.35)
+        self.assertIn("重复追问", result["problems"])
+
+    @patch("monitor.llm_ds")
+    def test_score_fallback_on_bad_json(self, mock_llm):
+        from monitor import score_conversation
+        mock_llm.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content="解析失败的文本"))
+        ]
+        result = score_conversation("任意对话")
+        self.assertEqual(result["score"], 1.0)
+        self.assertEqual(result["problems"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
