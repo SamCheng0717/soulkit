@@ -276,7 +276,11 @@ def main():
     parser.add_argument("--workers",   type=int,   default=8)
     args = parser.parse_args()
 
-    hours    = int(args.since.replace("h", ""))
+    try:
+        hours = int(args.since.replace("h", ""))
+    except ValueError:
+        print(f"错误：--since 格式不正确（'{args.since}'），请使用如 24h / 48h")
+        return
     since_dt = datetime.datetime.now() - datetime.timedelta(hours=hours)
     date_str = datetime.date.today().isoformat()
 
@@ -296,9 +300,12 @@ def main():
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futures = {ex.submit(fetch_messages, c["id"]): c["id"] for c in convs}
         for f in as_completed(futures):
-            cid  = futures[f]
-            msgs = f.result()
-            dialogues[cid] = format_dialogue(msgs)
+            cid = futures[f]
+            try:
+                msgs = f.result()
+                dialogues[cid] = format_dialogue(msgs)
+            except Exception as e:
+                print(f"  ⚠ 拉取对话 {cid[:8]} 消息失败：{e}")
     print(f"  → {len(dialogues)} 条消息记录拉取完成")
 
     print(f"\n[3/4] 留资检测 + 质量评分...")
@@ -311,7 +318,10 @@ def main():
         done = 0
         for f in as_completed(futures2):
             done += 1
-            results.append(f.result())
+            try:
+                results.append(f.result())
+            except Exception as e:
+                print(f"\n  ⚠ 处理对话失败：{e}")
             print(f"  [{done}/{len(dialogues)}]", end="\r")
     print()
 
@@ -327,8 +337,11 @@ def main():
         path = generate_daily_report(date_str, results, args.threshold)
         print(f"  → 日报: {path}")
     if args.report in ("weekly", "both"):
-        path = generate_weekly_report()
-        print(f"  → 周报: {path}")
+        try:
+            path = generate_weekly_report()
+            print(f"  → 周报: {path}")
+        except ValueError as e:
+            print(f"  ⚠ 周报跳过：{e}")
 
     print(f"\n{'='*52}\n")
 
