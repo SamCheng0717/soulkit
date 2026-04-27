@@ -256,3 +256,82 @@ def generate_weekly_report() -> Path:
     out = REPORTS / f"week-{today.year}-{week_num:02d}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
+
+
+# ── 单条对话处理（用于并发）──────────────────────────────────────────────────
+def process_conversation(conv_id: str, dialogue: str) -> dict:
+    return {
+        "id":        conv_id,
+        "converted": detect_conversion(dialogue),
+        "score":     score_conversation(dialogue),
+    }
+
+
+# ── 主入口 ──────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(description="BeautsGO AI 对话质量监控")
+    parser.add_argument("--since",     default="24h",    help="时间范围，如 24h / 48h")
+    parser.add_argument("--threshold", type=float, default=0.6, help="劣质判断阈值")
+    parser.add_argument("--report",    choices=["daily", "weekly", "both"], default="daily")
+    parser.add_argument("--workers",   type=int,   default=8)
+    args = parser.parse_args()
+
+    hours    = int(args.since.replace("h", ""))
+    since_dt = datetime.datetime.now() - datetime.timedelta(hours=hours)
+    date_str = datetime.date.today().isoformat()
+
+    print(f"{'='*52}")
+    print(f"  BeautsGO Monitor  |  {args.since}内  |  阈值 {args.threshold}")
+    print(f"{'='*52}")
+
+    print(f"\n[1/4] 拉取对话...")
+    convs = fetch_conversations(since_dt)
+    print(f"  → {len(convs)} 条对话")
+    if not convs:
+        print("  无数据，退出。")
+        return
+
+    print(f"\n[2/4] 拉取消息记录...")
+    dialogues: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = {ex.submit(fetch_messages, c["id"]): c["id"] for c in convs}
+        for f in as_completed(futures):
+            cid  = futures[f]
+            msgs = f.result()
+            dialogues[cid] = format_dialogue(msgs)
+    print(f"  → {len(dialogues)} 条消息记录拉取完成")
+
+    print(f"\n[3/4] 留资检测 + 质量评分...")
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures2 = {
+            ex.submit(process_conversation, cid, dia): cid
+            for cid, dia in dialogues.items()
+        }
+        done = 0
+        for f in as_completed(futures2):
+            done += 1
+            results.append(f.result())
+            print(f"  [{done}/{len(dialogues)}]", end="\r")
+    print()
+
+    total     = len(results)
+    converted = sum(1 for r in results if r["converted"])
+    bad_count = sum(1 for r in results if r["score"]["score"] < args.threshold)
+    print(f"  → 留资率 {converted/total*100:.1f}%  |  劣质 {bad_count} 条")
+
+    print(f"\n[4/4] 生成报告...")
+    append_stats(date_str, total, converted, bad_count)
+
+    if args.report in ("daily", "both"):
+        path = generate_daily_report(date_str, results, args.threshold)
+        print(f"  → 日报: {path}")
+    if args.report in ("weekly", "both"):
+        path = generate_weekly_report()
+        print(f"  → 周报: {path}")
+
+    print(f"\n{'='*52}\n")
+
+
+if __name__ == "__main__":
+    main()
