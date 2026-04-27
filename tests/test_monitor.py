@@ -142,5 +142,41 @@ class TestStats(unittest.TestCase):
             m.REPORTS = orig_reports
 
 
+class TestDailyReport(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def _run_report(self, results):
+        import monitor as m
+        from pathlib import Path
+        orig = m.REPORTS
+        m.REPORTS = Path(self.tmpdir)
+        try:
+            return m.generate_daily_report("2026-04-27", results)
+        finally:
+            m.REPORTS = orig
+
+    def test_report_contains_rate(self):
+        results = [
+            {"id": "abc123", "converted": True,  "score": {"score": 0.9, "problems": [], "bad_turn": "", "suggestion": ""}},
+            {"id": "def456", "converted": False, "score": {"score": 0.3, "problems": ["重复追问"], "bad_turn": "AI回复", "suggestion": "补FAQ"}},
+        ]
+        path = self._run_report(results)
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("50.0%", content)
+        self.assertIn("重复追问", content)
+        self.assertIn("补FAQ", content)
+
+    def test_report_no_bad_section_when_all_good(self):
+        results = [
+            {"id": "abc123", "converted": True, "score": {"score": 0.9, "problems": [], "bad_turn": "", "suggestion": ""}},
+        ]
+        path = self._run_report(results)
+        content = path.read_text(encoding="utf-8")
+        self.assertNotIn("劣质对话详情", content)
+
+
 if __name__ == "__main__":
     unittest.main()

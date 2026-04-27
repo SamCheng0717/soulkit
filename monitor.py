@@ -166,3 +166,45 @@ def append_stats(date: str, total: int, converted: int, bad: int) -> None:
     stats.sort(key=lambda x: x["date"])
     REPORTS.mkdir(exist_ok=True)
     STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ── 日报 ────────────────────────────────────────────────────────────────────
+def generate_daily_report(date: str, results: list[dict], threshold: float = 0.6) -> Path:
+    total     = len(results)
+    converted = sum(1 for r in results if r["converted"])
+    bad       = [r for r in results if r["score"]["score"] < threshold]
+    rate      = f"{converted / total * 100:.1f}%" if total else "0%"
+
+    problems: dict[str, int] = {}
+    for r in bad:
+        for p in r["score"].get("problems", []):
+            problems[p] = problems.get(p, 0) + 1
+
+    lines = [
+        f"# 日报 {date}\n",
+        f"对话总量：{total} 条 | 留资：{converted} 条 | 留资率：{rate}",
+        f"劣质对话：{len(bad)} 条 | 阈值：{threshold}\n",
+    ]
+
+    if problems:
+        lines.append("## 问题分布\n")
+        for p, c in sorted(problems.items(), key=lambda x: -x[1]):
+            lines.append(f"- {p}：{c} 条")
+        lines.append("")
+
+    if bad:
+        lines.append("\n## 劣质对话详情\n")
+        for r in bad:
+            s = r["score"]
+            probs = "、".join(s.get("problems", [])) or "未分类"
+            lines += [
+                f"### [会话 {r['id'][:6]}] 得分 {s['score']:.2f}",
+                f"**问题**：{probs}",
+                f"**AI回复**：{s.get('bad_turn', '')}",
+                f"**建议**：{s.get('suggestion', '')}\n",
+            ]
+
+    REPORTS.mkdir(exist_ok=True)
+    out = REPORTS / f"{date}.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
