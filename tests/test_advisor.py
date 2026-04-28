@@ -7,6 +7,7 @@ SAMPLE_REPORT = """
 
 ### [会话 ad634e](http://example.com) 得分 0.25　用户 `86030`
 **问题**：顾客重复追问同一问题、AI 回复出现违禁词（我们）
+**顾客**：超声刀多少钱？
 **AI回复**：宝宝眼光真好！方便留个微信吗？
 **建议**：顾客已多次拒绝留微信，AI 应直接提供价格范围。
 """
@@ -26,6 +27,7 @@ def test_extract_cases_structure():
     section = {
         "conv_id": "ad634e",
         "problems": "顾客重复追问同一问题",
+        "customer_turn": "超声刀多少钱？",
         "ai_reply": "宝宝眼光真好！方便留个微信吗？",
         "suggestion": "直接提供价格范围",
     }
@@ -33,6 +35,7 @@ def test_extract_cases_structure():
     assert case["id"].startswith("tc_")
     assert case["split"] in ("optimize", "holdout")
     assert case["source"] == "2026-04-27_ad634e"
+    assert case["customer_input"] == "超声刀多少钱？"
     assert isinstance(case["must_not_contain"], list)
     assert isinstance(case["expected_behavior"], str)
 

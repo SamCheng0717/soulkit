@@ -32,6 +32,7 @@ REPORTS_DIR        = Path("reports")
 _SECTION_RE = re.compile(
     r"### \[会话 ([a-f0-9]+)\].*?得分 [\d.]+.*?用户 `(\w+)`\n"
     r"\*\*问题\*\*：(.+?)\n"
+    r"(?:\*\*顾客\*\*：(.+?)\n)?"   # 可选：旧格式日报无此行
     r"\*\*AI回复\*\*：(.+?)\n"
     r"\*\*建议\*\*：(.+?)(?=\n###|\Z)",
     re.DOTALL,
@@ -41,11 +42,12 @@ def _parse_bad_sections(report_text: str) -> list[dict]:
     results = []
     for m in _SECTION_RE.finditer(report_text):
         results.append({
-            "conv_id":    m.group(1).strip(),
-            "user_id":    m.group(2).strip(),
-            "problems":   m.group(3).strip(),
-            "ai_reply":   m.group(4).strip(),
-            "suggestion": m.group(5).strip(),
+            "conv_id":       m.group(1).strip(),
+            "user_id":       m.group(2).strip(),
+            "problems":      m.group(3).strip(),
+            "customer_turn": (m.group(4) or "").strip(),
+            "ai_reply":      m.group(5).strip(),
+            "suggestion":    m.group(6).strip(),
         })
     return results
 
@@ -64,7 +66,7 @@ def _section_to_case(section: dict, source_date: str = "") -> dict:
         "id":               case_id,
         "split":            split,
         "source":           f"{date}_{section['conv_id']}",
-        "customer_input":   section.get("ai_reply", "")[:120],
+        "customer_input":   section.get("customer_turn", "")[:120],
         "must_not_contain": forbidden,
         "expected_behavior": section.get("suggestion", ""),
     }

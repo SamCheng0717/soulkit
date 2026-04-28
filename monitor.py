@@ -1,5 +1,7 @@
 # monitor.py
-import os, json, datetime, argparse
+import sys, os, json, datetime, argparse
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,36 +24,72 @@ def _make_clients():
 
 llm_ds, llm_local = _make_clients()
 
-DIFY_BASE   = os.getenv("DIFY_BASE_URL", "http://localhost:80").rstrip("/")
-DIFY_KEY    = os.getenv("DIFY_API_KEY", "")
-DIFY_USER   = os.getenv("DIFY_USER", "monitor")
-DS_MODEL    = os.getenv("MODEL", "deepseek-chat")
-LOCAL_MODEL = os.getenv("LOCAL_MODEL", "Qwen/Qwen3-14B-AWQ")
+DIFY_BASE          = os.getenv("DIFY_BASE_URL", "http://localhost:80").rstrip("/")
+DIFY_KEY           = os.getenv("DIFY_API_KEY", "")
+DIFY_APP_ID        = os.getenv("DIFY_APP_ID", "")
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DB_PORT = int(os.getenv("DB_PORT", 3306))
+DB_USER = os.getenv("DB_USER", "")
+DB_PASS = os.getenv("DB_PASS", "")
+DB_NAME = os.getenv("DB_NAME", "")
+DS_MODEL           = os.getenv("MODEL", "deepseek-chat")
+LOCAL_MODEL        = os.getenv("LOCAL_MODEL", "Qwen/Qwen3-14B-AWQ")
+DINGTALK_WEBHOOK   = os.getenv("DINGTALK_WEBHOOK", "")
+DINGTALK_SECRET    = os.getenv("DINGTALK_SECRET", "")
 
 REPORTS = Path("reports")
 STATS   = REPORTS / "stats.json"
 
 
-# ── Dify API ──────────────────────────────────────────────────────────────
-def fetch_conversations(since: datetime.datetime) -> list[dict]:
-    """拉取 since 之后创建的所有对话（分页）。"""
-    # since 必须是 naive datetime（datetime.datetime.now()），与 fromtimestamp 保持一致
-    headers = {"Authorization": f"Bearer {DIFY_KEY}"}
+# ── DB + Dify App API ────────────────────────────────────────────────────
+def _db_conn():
+    import pymysql
+    return pymysql.connect(
+        host=DB_HOST, port=DB_PORT, user=DB_USER,
+        password=DB_PASS, database=DB_NAME,
+        charset="utf8mb4", connect_timeout=10,
+    )
+
+
+def _get_all_member_ids() -> list[str]:
+    """从 DB 拉取服务群（group_category=2）顾客 member_id。
+    Dify 实际使用的 user 参数就是 hd_group_member.id。
+    只取 id <= 90000 的范围（超出范围的群不使用此 Dify App）。"""
+    conn = _db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT gm.id "
+                "FROM hd_group_member gm "
+                "JOIN hd_groups g ON g.gid = gm.gid "
+                "WHERE g.group_category = 2 "
+                "AND gm.id <= 90000 "
+                "AND gm.delete_time IS NULL "
+                "AND g.delete_time IS NULL "
+                "ORDER BY gm.id DESC"
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _fetch_convs_for_uid(session: "requests.Session", uid: str, since_ts: float) -> list[dict]:
+    """用 App API 拉取单个用户 since 之后更新的对话列表（复用 session）。"""
     results, last_id = [], None
     while True:
-        params: dict = {"user": DIFY_USER, "limit": 100, "sort_by": "-updated_at"}
+        params: dict = {"user": uid, "limit": 100}
         if last_id:
             params["last_id"] = last_id
-        r = requests.get(f"{DIFY_BASE}/v1/conversations", headers=headers, params=params)
+        r = session.get(f"{DIFY_BASE}/v1/conversations", params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
         convs = data.get("data", [])
         if not convs:
             break
         for c in convs:
-            created = datetime.datetime.fromtimestamp(c["created_at"])
-            if created < since:
+            if c.get("updated_at", 0) < since_ts:
                 return results
+            c["_uid"] = uid
             results.append(c)
         if not data.get("has_more"):
             break
@@ -59,12 +97,46 @@ def fetch_conversations(since: datetime.datetime) -> list[dict]:
     return results
 
 
-def fetch_messages(conv_id: str) -> list[dict]:
-    """拉取单条对话的完整消息记录（分页）。"""
+def fetch_conversations(since: datetime.datetime) -> list[dict]:
+    """DB 查所有服务群 member_id → 并发问 Dify → 只保留 since 后有更新的对话。"""
+    import threading
+    member_ids = _get_all_member_ids()
+    print(f"  → 共 {len(member_ids)} 个 member_id，并发查询 Dify...")
+    since_ts = since.timestamp()
+    seen: dict[str, dict] = {}
+    _local = threading.local()
+
+    def _get_session():
+        if not hasattr(_local, "session"):
+            s = requests.Session()
+            s.headers["Authorization"] = f"Bearer {DIFY_KEY}"
+            _local.session = s
+        return _local.session
+
+    def _fetch(uid):
+        return _fetch_convs_for_uid(_get_session(), uid, since_ts)
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_fetch, uid): uid for uid in member_ids}
+        done = 0
+        for f in as_completed(futures):
+            done += 1
+            if done % 500 == 0:
+                print(f"  [{done}/{len(member_ids)}] 已找到 {len(seen)} 条对话", end="\r")
+            try:
+                for c in f.result():
+                    seen[c["id"]] = c
+            except Exception:
+                pass
+    return list(seen.values())
+
+
+def fetch_messages(conv_id: str, user_id: str) -> list[dict]:
+    """拉取单条对话的完整消息记录（App API + from_end_user_session_id）。"""
     headers = {"Authorization": f"Bearer {DIFY_KEY}"}
     results, first_id = [], None
     while True:
-        params: dict = {"user": DIFY_USER, "conversation_id": conv_id, "limit": 100}
+        params: dict = {"user": user_id, "conversation_id": conv_id, "limit": 100}
         if first_id:
             params["first_id"] = first_id
         r = requests.get(f"{DIFY_BASE}/v1/messages", headers=headers, params=params)
@@ -130,7 +202,7 @@ SCORE_PROMPT = """\
 - 顾客全程未留微信/电话 → 轻微扣分
 
 输出 JSON（只输出 JSON）：
-{{"score": 0.35, "problems": ["重复追问"], "bad_turn": "AI第3条回复原文", "suggestion": "建议内容"}}
+{{"score": 0.35, "problems": ["重复追问"], "customer_turn": "触发该问题的顾客原话", "bad_turn": "AI第3条回复原文", "suggestion": "建议内容"}}
 
 对话：
 {dialogue}"""
@@ -143,8 +215,15 @@ def score_conversation(dialogue: str) -> dict:
         messages=[{"role": "user", "content": SCORE_PROMPT.format(dialogue=dialogue)}],
         temperature=0.1,
         max_tokens=512,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     text = (r.choices[0].message.content or "").strip()
+    # 去掉 ```json ... ``` 包裹
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
     try:
         return json.loads(text)
     except Exception:
@@ -168,8 +247,64 @@ def append_stats(date: str, total: int, converted: int, bad: int) -> None:
     STATS.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ── 钉钉推送 ──────────────────────────────────────────────────────────────────
+def send_dingtalk(date: str, results: list[dict], threshold: float, logs_url: str) -> None:
+    """将日报统计摘要推送到钉钉群机器人。"""
+    import time, hmac, hashlib, base64, urllib.parse
+
+    if not DINGTALK_WEBHOOK or not DINGTALK_SECRET:
+        return
+
+    total     = len(results)
+    converted = sum(1 for r in results if r["converted"])
+    bad       = [r for r in results if r["score"]["score"] < threshold]
+    rate      = f"{converted / total * 100:.1f}%" if total else "0%"
+
+    problems: dict[str, int] = {}
+    for r in bad:
+        for p in r["score"].get("problems", []):
+            problems[p] = problems.get(p, 0) + 1
+    top5 = sorted(problems.items(), key=lambda x: -x[1])[:5]
+
+    lines = [
+        f"## BeautsGO 日报 {date}",
+        "",
+        f"**对话量** {total} 条 ｜ **留资** {converted} 条 ｜ **留资率** {rate}",
+        f"**劣质对话** {len(bad)} 条（阈值 {threshold}）",
+        "",
+    ]
+    if top5:
+        lines.append("**Top 问题：**")
+        for p, c in top5:
+            lines.append(f"- {p}：{c} 条")
+        lines.append("")
+    if logs_url:
+        lines.append(f"[查看 Dify 日志]({logs_url})")
+
+    text = "\n".join(lines)
+
+    # HMAC-SHA256 签名
+    ts       = str(round(time.time() * 1000))
+    sign_src = f"{ts}\n{DINGTALK_SECRET}".encode("utf-8")
+    digest   = hmac.new(DINGTALK_SECRET.encode("utf-8"), sign_src, digestmod=hashlib.sha256).digest()
+    sign     = urllib.parse.quote_plus(base64.b64encode(digest))
+    url      = f"{DINGTALK_WEBHOOK}&timestamp={ts}&sign={sign}"
+
+    resp = requests.post(url, json={
+        "msgtype":  "markdown",
+        "markdown": {"title": f"BeautsGO 日报 {date}", "text": text},
+    }, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errcode") != 0:
+        raise RuntimeError(data.get("errmsg", str(data)))
+
+
 # ── 日报 ────────────────────────────────────────────────────────────────────
-def generate_daily_report(date: str, results: list[dict], threshold: float = 0.6) -> Path:
+def generate_daily_report(
+    date: str, results: list[dict], threshold: float = 0.6,
+    conv_url_base: str = ""
+) -> Path:
     total     = len(results)
     converted = sum(1 for r in results if r["converted"])
     bad       = [r for r in results if r["score"]["score"] < threshold]
@@ -197,9 +332,17 @@ def generate_daily_report(date: str, results: list[dict], threshold: float = 0.6
         for r in bad:
             s = r["score"]
             probs = "、".join(s.get("problems", [])) or "未分类"
+            conv_id = r["id"]
+            user_id = r.get("user_id", "")
+            # 链接到日志列表页；右侧括注用户 UID 供 Dify 搜索框定位
+            if conv_url_base:
+                heading = f"### [会话 {conv_id[:6]}]({conv_url_base}) 得分 {s['score']:.2f}　用户 `{user_id}`"
+            else:
+                heading = f"### [会话 {conv_id[:6]}] 得分 {s['score']:.2f}"
             lines += [
-                f"### [会话 {r['id'][:6]}] 得分 {s['score']:.2f}",
+                heading,
                 f"**问题**：{probs}",
+                f"**顾客**：{s.get('customer_turn', '')}",
                 f"**AI回复**：{s.get('bad_turn', '')}",
                 f"**建议**：{s.get('suggestion', '')}\n",
             ]
@@ -259,9 +402,10 @@ def generate_weekly_report() -> Path:
 
 
 # ── 单条对话处理（用于并发）──────────────────────────────────────────────────
-def process_conversation(conv_id: str, dialogue: str) -> dict:
+def process_conversation(conv_id: str, dialogue: str, user_id: str = "") -> dict:
     return {
         "id":        conv_id,
+        "user_id":   user_id,
         "converted": detect_conversion(dialogue),
         "score":     score_conversation(dialogue),
     }
@@ -296,14 +440,16 @@ def main():
         return
 
     print(f"\n[2/4] 拉取消息记录...")
-    dialogues: dict[str, str] = {}
+    # {conv_id: (user_id, dialogue)}
+    dialogues: dict[str, tuple[str, str]] = {}
+    conv_users = {c["id"]: c.get("_uid", "") for c in convs}
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futures = {ex.submit(fetch_messages, c["id"]): c["id"] for c in convs}
+        futures = {ex.submit(fetch_messages, c["id"], conv_users[c["id"]]): c["id"] for c in convs}
         for f in as_completed(futures):
             cid = futures[f]
             try:
                 msgs = f.result()
-                dialogues[cid] = format_dialogue(msgs)
+                dialogues[cid] = (conv_users[cid], format_dialogue(msgs))
             except Exception as e:
                 print(f"  ⚠ 拉取对话 {cid[:8]} 消息失败：{e}")
     print(f"  → {len(dialogues)} 条消息记录拉取完成")
@@ -312,8 +458,8 @@ def main():
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futures2 = {
-            ex.submit(process_conversation, cid, dia): cid
-            for cid, dia in dialogues.items()
+            ex.submit(process_conversation, cid, dia, uid): cid
+            for cid, (uid, dia) in dialogues.items()
         }
         done = 0
         for f in as_completed(futures2):
@@ -328,13 +474,19 @@ def main():
     total     = len(results)
     converted = sum(1 for r in results if r["converted"])
     bad_count = sum(1 for r in results if r["score"]["score"] < args.threshold)
-    print(f"  → 留资率 {converted/total*100:.1f}%  |  劣质 {bad_count} 条")
+    rate_str  = f"{converted/total*100:.1f}%" if total else "N/A"
+    print(f"  → 留资率 {rate_str}  |  劣质 {bad_count} 条")
+
+    if not total:
+        print("  所有对话处理失败，退出。")
+        return
 
     print(f"\n[4/4] 生成报告...")
     append_stats(date_str, total, converted, bad_count)
 
+    conv_url_base = f"{DIFY_BASE}/app/{DIFY_APP_ID}/logs" if DIFY_APP_ID else ""
     if args.report in ("daily", "both"):
-        path = generate_daily_report(date_str, results, args.threshold)
+        path = generate_daily_report(date_str, results, args.threshold, conv_url_base)
         print(f"  → 日报: {path}")
     if args.report in ("weekly", "both"):
         try:
@@ -342,6 +494,13 @@ def main():
             print(f"  → 周报: {path}")
         except ValueError as e:
             print(f"  ⚠ 周报跳过：{e}")
+
+    if DINGTALK_WEBHOOK:
+        try:
+            send_dingtalk(date_str, results, args.threshold, conv_url_base)
+            print("  → 钉钉推送成功")
+        except Exception as e:
+            print(f"  ⚠ 钉钉推送失败：{e}")
 
     print(f"\n{'='*52}\n")
 
