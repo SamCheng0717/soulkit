@@ -180,7 +180,12 @@ def get_next_version() -> str:
 
 
 def publish_version(candidate: str, version: str, change_info: dict) -> None:
-    """归档当前提示词为 version_date.md，写入候选版本，追加 CHANGELOG。"""
+    """归档当前提示词为 version_date.md，写入候选版本，追加 CHANGELOG。
+
+    归档语义：vNNN_date.md 存的是该版本的候选内容（非发布前的旧版本）。
+    rollback vNNN = 恢复到 vNNN 发布时的提示词内容。
+    首次发布时额外保存 v000 备份以保留原始状态。
+    """
     today = datetime.date.today().isoformat()
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -385,6 +390,7 @@ def run_advisor(
         )
         print(f"  → 发布 {version} 成功！模块：{result.get('module')}")
 
+        # 仅在成功发布时清空反馈，失败时保留供下次重试或人工介入
         if FEEDBACK_PATH.exists() and feedback_text.strip():
             FEEDBACK_PATH.write_text("", encoding="utf-8")
 
@@ -472,7 +478,7 @@ def main():
         if args.report:
             report_path = Path(args.report)
         else:
-            reports = sorted(Path("reports").glob("????-??-??.md"))
+            reports = sorted(REPORTS_DIR.glob("????-??-??.md"))
             if not reports:
                 print("错误：reports/ 下无日报文件")
                 return
