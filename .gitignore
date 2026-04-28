@@ -1,5 +1,6 @@
 .env
 reports/
+docs/
 raw/
 wiki/faq/
 wiki/index.md
