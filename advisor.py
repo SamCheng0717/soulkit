@@ -96,3 +96,73 @@ def extract_cases(report_path: Path) -> list[dict]:
         CASES_PATH.write_text(json.dumps(all_cases, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return new_cases
+
+
+_BEHAVIOR_JUDGE_PROMPT = """\
+以下是 AI 客服的一条回复，判断它是否满足要求："{behavior}"
+只回答 JSON：{{"ok": true}} 或 {{"ok": false}}
+
+AI回复：
+{reply}"""
+
+
+def _judge_behavior(reply: str, behavior: str) -> bool:
+    r = llm_advisor.chat.completions.create(
+        model=ADVISOR_MODEL,
+        messages=[{"role": "user", "content": _BEHAVIOR_JUDGE_PROMPT.format(
+            behavior=behavior, reply=reply
+        )}],
+        temperature=0.0,
+        max_tokens=20,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    text = (r.choices[0].message.content or "").strip()
+    try:
+        return bool(json.loads(text).get("ok", False))
+    except Exception:
+        return "true" in text.lower()
+
+
+def evaluate_candidate(candidate_prompt: str, cases: list[dict]) -> dict:
+    """用候选提示词模拟回复每条用例，返回 {passed, failures, stats}。"""
+    failures = []
+    for case in cases:
+        # 1. 模拟 AI 回复
+        resp = llm_advisor.chat.completions.create(
+            model=ADVISOR_MODEL,
+            messages=[
+                {"role": "system", "content": candidate_prompt},
+                {"role": "user",   "content": case["customer_input"]},
+            ],
+            temperature=0.1,
+            max_tokens=256,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+
+        # 2. 检查违禁词（精确字符串匹配）
+        hit = [w for w in case.get("must_not_contain", []) if w in reply]
+        if hit:
+            failures.append({
+                "id": case["id"], "reason": f"含违禁词：{hit}", "reply": reply[:200]
+            })
+            continue
+
+        # 3. 检查期望行为（LLM 判断）
+        if case.get("expected_behavior"):
+            ok = _judge_behavior(reply, case["expected_behavior"])
+            if not ok:
+                failures.append({
+                    "id": case["id"],
+                    "reason": f"未满足：{case['expected_behavior']}",
+                    "reply": reply[:200],
+                })
+
+    total = len(cases)
+    passed_count = total - len(failures)
+    return {
+        "passed":       len(failures) == 0,
+        "total":        total,
+        "passed_count": passed_count,
+        "failures":     failures,
+    }

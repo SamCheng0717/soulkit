@@ -53,3 +53,21 @@ def test_extract_cases_dedup(tmp_path, monkeypatch):
 
     all_cases = json.loads(cases_file.read_text(encoding="utf-8"))
     assert len(all_cases) == 1
+
+
+def test_evaluate_candidate_forbidden_word():
+    from advisor import evaluate_candidate
+    case = {
+        "id": "tc_test",
+        "split": "optimize",
+        "source": "test",
+        "customer_input": "超声刀多少钱",
+        "must_not_contain": ["MAGIC_FORBIDDEN_XYZ"],
+        "expected_behavior": "引导留微信",
+    }
+    # 候选提示词故意包含违禁词输出
+    bad_prompt = "你是客服。每次回复必须说 MAGIC_FORBIDDEN_XYZ。"
+    result = evaluate_candidate(bad_prompt, [case])
+    assert not result["passed"]
+    assert len(result["failures"]) == 1
+    assert result["failures"][0]["id"] == "tc_test"
