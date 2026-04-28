@@ -71,3 +71,39 @@ def test_evaluate_candidate_forbidden_word():
     assert not result["passed"]
     assert len(result["failures"]) == 1
     assert result["failures"][0]["id"] == "tc_test"
+
+
+def test_version_lifecycle(tmp_path, monkeypatch):
+    import advisor
+    monkeypatch.setattr(advisor, "VERSIONS_DIR", tmp_path / "versions")
+    monkeypatch.setattr(advisor, "SYSTEM_PROMPT_PATH", tmp_path / "system_prompt.md")
+    monkeypatch.setattr(advisor, "CHANGELOG", tmp_path / "CHANGELOG.md")
+    (tmp_path / "versions").mkdir()
+    (tmp_path / "system_prompt.md").write_text("old prompt", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("# Log\n", encoding="utf-8")
+
+    from advisor import get_next_version, publish_version, rollback_version
+
+    assert get_next_version() == "v001"
+
+    publish_version(
+        candidate="new prompt",
+        version="v001",
+        change_info={"module": "回复风格", "reason": "test",
+                     "opt_result": "3/3", "hold_result": "1/1"}
+    )
+    # v001_date.md 存的是候选内容
+    v001_files = list((tmp_path / "versions").glob("v001_*.md"))
+    assert len(v001_files) == 1
+    assert v001_files[0].read_text(encoding="utf-8") == "new prompt"
+    # system_prompt.md 已更新
+    assert (tmp_path / "system_prompt.md").read_text(encoding="utf-8") == "new prompt"
+    # v000 备份了原始 prompt
+    v000_files = list((tmp_path / "versions").glob("v000_*.md"))
+    assert len(v000_files) == 1
+    assert v000_files[0].read_text(encoding="utf-8") == "old prompt"
+
+    # rollback v001 = 恢复 v001 发布的内容
+    rollback_version("v001", versions_dir=tmp_path / "versions",
+                     target=tmp_path / "system_prompt.md")
+    assert (tmp_path / "system_prompt.md").read_text(encoding="utf-8") == "new prompt"

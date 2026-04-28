@@ -166,3 +166,60 @@ def evaluate_candidate(candidate_prompt: str, cases: list[dict]) -> dict:
         "passed_count": passed_count,
         "failures":     failures,
     }
+
+
+# ── 版本管理 ──────────────────────────────────────────────────────────────────
+def get_next_version() -> str:
+    VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    existing = sorted(VERSIONS_DIR.glob("v*.md"))
+    if not existing:
+        return "v001"
+    last = existing[-1].stem.split("_")[0]  # "v003"
+    n = int(last[1:]) + 1
+    return f"v{n:03d}"
+
+
+def publish_version(candidate: str, version: str, change_info: dict) -> None:
+    """归档当前提示词为 version_date.md，写入候选版本，追加 CHANGELOG。"""
+    today = datetime.date.today().isoformat()
+    VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 第一次发布时，将当前 system_prompt.md 存为 v000 备份
+    if version == "v001" and SYSTEM_PROMPT_PATH.exists():
+        v000_files = list(VERSIONS_DIR.glob("v000_*.md"))
+        if not v000_files:
+            shutil.copy(SYSTEM_PROMPT_PATH, VERSIONS_DIR / f"v000_{today}.md")
+
+    # 将候选版本存为 version_date.md
+    archive = VERSIONS_DIR / f"{version}_{today}.md"
+    archive.write_text(candidate, encoding="utf-8")
+
+    # 更新 system_prompt.md
+    SYSTEM_PROMPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYSTEM_PROMPT_PATH.write_text(candidate, encoding="utf-8")
+
+    # 追加 CHANGELOG
+    entry = (
+        f"\n## {version} — {today}\n"
+        f"**改动模块**：{change_info.get('module', '')}\n"
+        f"**原因**：{change_info.get('reason', '')}\n"
+        f"**测试**：优化集 {change_info.get('opt_result', '')}，"
+        f"验证集 {change_info.get('hold_result', '')}\n"
+    )
+    CHANGELOG.parent.mkdir(parents=True, exist_ok=True)
+    with CHANGELOG.open("a", encoding="utf-8") as f:
+        f.write(entry)
+
+
+def rollback_version(
+    version: str,
+    versions_dir: Path = VERSIONS_DIR,
+    target: Path = SYSTEM_PROMPT_PATH,
+) -> None:
+    """将 target 恢复为指定版本的内容（rollback vXXX = 使用 vXXX 时发布的候选提示词）。"""
+    candidates = list(versions_dir.glob(f"{version}_*.md"))
+    if not candidates:
+        raise FileNotFoundError(f"版本 {version} 不存在于 {versions_dir}")
+    src = sorted(candidates)[-1]
+    shutil.copy(src, target)
+    print(f"已回滚到 {src.name}")
