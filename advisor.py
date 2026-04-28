@@ -51,8 +51,7 @@ def _parse_bad_sections(report_text: str) -> list[dict]:
 
 
 def _section_to_case(section: dict, source_date: str = "") -> dict:
-    # allow source_date to be embedded in the section dict (used by tests)
-    date = section.get("source_date", source_date)
+    date = source_date
     problems = section.get("problems", "")
     forbidden: list[str] = []
     for kw in ["我们", "案例", "知识库", "保证", "绝对", "百分之百"]:
@@ -76,7 +75,13 @@ def extract_cases(report_path: Path) -> list[dict]:
     date_str = report_path.stem
     sections = _parse_bad_sections(text)
 
-    existing = json.loads(CASES_PATH.read_text(encoding="utf-8")) if CASES_PATH.exists() else []
+    if CASES_PATH.exists():
+        try:
+            existing = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    else:
+        existing = []
     existing_sources = {c["source"] for c in existing}
 
     new_cases = []

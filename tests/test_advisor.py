@@ -1,4 +1,4 @@
-import sys, json
+import sys, json, tempfile
 sys.path.insert(0, ".")
 from pathlib import Path
 
@@ -25,19 +25,16 @@ def test_extract_cases_structure():
     from advisor import _section_to_case
     section = {
         "conv_id": "ad634e",
-        "source_date": "2026-04-27",
         "problems": "顾客重复追问同一问题",
         "ai_reply": "宝宝眼光真好！方便留个微信吗？",
         "suggestion": "直接提供价格范围",
     }
-    case = _section_to_case(section)
+    case = _section_to_case(section, source_date="2026-04-27")
     assert case["id"].startswith("tc_")
     assert case["split"] in ("optimize", "holdout")
     assert case["source"] == "2026-04-27_ad634e"
     assert isinstance(case["must_not_contain"], list)
     assert isinstance(case["expected_behavior"], str)
-
-import tempfile, os
 
 def test_extract_cases_dedup(tmp_path, monkeypatch):
     from advisor import extract_cases, CASES_PATH
