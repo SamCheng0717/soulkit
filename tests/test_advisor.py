@@ -107,3 +107,18 @@ def test_version_lifecycle(tmp_path, monkeypatch):
     rollback_version("v001", versions_dir=tmp_path / "versions",
                      target=tmp_path / "system_prompt.md")
     assert (tmp_path / "system_prompt.md").read_text(encoding="utf-8") == "new prompt"
+
+
+def test_generate_candidate_returns_structure():
+    from advisor import generate_candidate
+    result = generate_candidate(
+        report_text="## 问题分布\n- AI 回复出现违禁词（我们）：5 条\n",
+        feedback_text="",
+        current_prompt="你是客服助手。",
+        optimize_cases=[],
+        failures=None,
+    )
+    assert "candidate_prompt" in result
+    assert "module" in result
+    assert "reason" in result
+    assert len(result["candidate_prompt"]) > 10

@@ -223,3 +223,84 @@ def rollback_version(
     src = sorted(candidates)[-1]
     shutil.copy(src, target)
     print(f"已回滚到 {src.name}")
+
+
+# ── 主管智能体 ────────────────────────────────────────────────────────────────
+_SUPERVISOR_PROMPT = """\
+你是资深客服主管，负责优化 AI 客服系统提示词。
+
+【当前系统提示词】
+{current_prompt}
+
+【今日日报摘要】
+{report_text}
+
+【人工反馈】
+{feedback_text}
+
+【优化集测试用例（共 {n_cases} 条）】
+{cases_text}
+
+{failure_section}
+
+【任务】
+1. 分析上述问题，提炼 1 条通用规则（不允许针对具体句子打补丁）
+2. 只修改提示词中的一个模块（如"身份规则"/"回复风格"/"违禁词"等区域）
+3. 禁止全文重写
+4. 输出 JSON（只输出 JSON，不要其他文字）：
+{{
+  "module": "修改的模块名称",
+  "reason": "为什么要改，引用了哪些数据",
+  "expected_effect": "改完后预期改善什么",
+  "candidate_prompt": "完整的新系统提示词文本"
+}}"""
+
+
+def generate_candidate(
+    report_text: str,
+    feedback_text: str,
+    current_prompt: str,
+    optimize_cases: list[dict],
+    failures: list[dict] | None = None,
+) -> dict:
+    cases_text = "\n".join(
+        f"- [{c['id']}] 输入：{c['customer_input'][:80]}  期望：{c['expected_behavior']}"
+        for c in optimize_cases[:20]
+    )
+    failure_section = ""
+    if failures:
+        lines = ["【上次测试失败原因，本次必须修复】"]
+        for f in failures[:10]:
+            lines.append(f"- {f['id']}: {f['reason']}")
+        failure_section = "\n".join(lines)
+
+    prompt = _SUPERVISOR_PROMPT.format(
+        current_prompt=current_prompt,
+        report_text=report_text[:3000],
+        feedback_text=feedback_text[:1000] if feedback_text else "（无）",
+        n_cases=len(optimize_cases),
+        cases_text=cases_text,
+        failure_section=failure_section,
+    )
+    r = llm_advisor.chat.completions.create(
+        model=ADVISOR_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=4096,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    text = (r.choices[0].message.content or "").strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return {
+            "module": "未知",
+            "reason": "解析失败",
+            "expected_effect": "",
+            "candidate_prompt": current_prompt,
+        }
