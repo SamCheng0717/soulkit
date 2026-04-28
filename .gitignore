@@ -1,4 +1,5 @@
 .env
+reports/
 raw/
 wiki/faq/
 wiki/index.md
