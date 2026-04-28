@@ -120,11 +120,11 @@ def _judge_behavior(reply: str, behavior: str) -> bool:
     try:
         return bool(json.loads(text).get("ok", False))
     except Exception:
-        return "true" in text.lower()
+        return False  # 保守策略：解析失败时拒绝，避免误放行
 
 
 def evaluate_candidate(candidate_prompt: str, cases: list[dict]) -> dict:
-    """用候选提示词模拟回复每条用例，返回 {passed, failures, stats}。"""
+    """用候选提示词模拟回复每条用例，返回 {passed, total, passed_count, failures}。"""
     failures = []
     for case in cases:
         # 1. 模拟 AI 回复
