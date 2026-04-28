@@ -403,3 +403,93 @@ def run_advisor(
         "attempts": MAX_RETRIES,
         "failures": failures or [],
     }
+
+
+# ── 钉钉通知 ──────────────────────────────────────────────────────────────────
+def send_advisor_dingtalk(result: dict, date: str) -> None:
+    import time, hmac, hashlib, base64, urllib.parse
+    if not DINGTALK_WEBHOOK or not DINGTALK_SECRET:
+        return
+
+    action = result.get("action")
+    if action == "published":
+        title = f"提示词更新 {result['version']} — {date}"
+        lines = [
+            f"## {title}", "",
+            f"**改动模块**：{result.get('module', '')}",
+            f"**原因**：{result.get('reason', '')[:200]}",
+            f"**测试**：优化集 {result.get('opt_result')}，验证集 {result.get('hold_result')}",
+        ]
+    elif action == "failed":
+        title = f"提示词优化未通过 — {date}"
+        top = result.get("failures", [])[:3]
+        lines = [
+            f"## {title}", "",
+            f"**{result.get('attempts')} 次重试全失败**",
+            "**失败原因（前3条）：**",
+        ] + [f"- {f['id']}: {f['reason']}" for f in top] + [
+            "", "建议：请检查 feedback/pending.md 并手动调整",
+        ]
+    elif action == "rolled_back":
+        title = f"提示词已回滚 {result.get('version')} — {date}"
+        lines = [f"## {title}", "", f"已回滚到版本 {result.get('version')}"]
+    else:
+        return
+
+    text = "\n".join(lines)
+    ts       = str(round(time.time() * 1000))
+    sign_src = f"{ts}\n{DINGTALK_SECRET}".encode("utf-8")
+    digest   = hmac.new(DINGTALK_SECRET.encode("utf-8"), sign_src, digestmod=hashlib.sha256).digest()
+    sign     = urllib.parse.quote_plus(base64.b64encode(digest))
+    url      = f"{DINGTALK_WEBHOOK}&timestamp={ts}&sign={sign}"
+    resp = requests.post(url, json={
+        "msgtype":  "markdown",
+        "markdown": {"title": title, "text": text},
+    }, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errcode") != 0:
+        raise RuntimeError(data.get("errmsg", str(data)))
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(description="BeautsGO 客服主管智能体")
+    parser.add_argument("--report",       default="",  help="指定日报路径，默认取最新")
+    parser.add_argument("--extract-only", action="store_true", help="只提取测试用例，不优化")
+    parser.add_argument("--rollback",     default="",  help="回滚到指定版本，如 v002")
+    args = parser.parse_args()
+
+    date_str = datetime.date.today().isoformat()
+    print(f"{'='*52}")
+    print(f"  BeautsGO Advisor  |  {date_str}")
+    print(f"{'='*52}\n")
+
+    if args.rollback:
+        rollback_version(args.rollback)
+        result = {"action": "rolled_back", "version": args.rollback}
+    else:
+        if args.report:
+            report_path = Path(args.report)
+        else:
+            reports = sorted(Path("reports").glob("????-??-??.md"))
+            if not reports:
+                print("错误：reports/ 下无日报文件")
+                return
+            report_path = reports[-1]
+        print(f"  日报：{report_path}")
+        result = run_advisor(report_path, extract_only=args.extract_only)
+
+    print(f"\n  结果：{result['action']}")
+
+    try:
+        send_advisor_dingtalk(result, date_str)
+        print("  → 钉钉推送成功")
+    except Exception as e:
+        print(f"  ⚠ 钉钉推送失败：{e}")
+
+    print(f"\n{'='*52}\n")
+
+
+if __name__ == "__main__":
+    main()
