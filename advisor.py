@@ -175,7 +175,10 @@ def get_next_version() -> str:
     if not existing:
         return "v001"
     last = existing[-1].stem.split("_")[0]  # "v003"
-    n = int(last[1:]) + 1
+    try:
+        n = int(last[1:]) + 1
+    except ValueError:
+        raise ValueError(f"无法解析版本号：{existing[-1].name}，请检查 {VERSIONS_DIR} 目录")
     return f"v{n:03d}"
 
 
@@ -317,7 +320,13 @@ HOLDOUT_PASS_THRESHOLD = 0.75
 
 
 def _load_cases() -> tuple[list[dict], list[dict]]:
-    all_cases = json.loads(CASES_PATH.read_text(encoding="utf-8")) if CASES_PATH.exists() else []
+    if CASES_PATH.exists():
+        try:
+            all_cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            all_cases = []
+    else:
+        all_cases = []
     optimize = [c for c in all_cases if c.get("split") == "optimize"]
     holdout  = [c for c in all_cases if c.get("split") == "holdout"]
     return optimize, holdout
@@ -472,8 +481,7 @@ def main():
     print(f"{'='*52}\n")
 
     if args.rollback:
-        rollback_version(args.rollback)
-        result = {"action": "rolled_back", "version": args.rollback}
+        result = run_advisor(report_path=Path("."), rollback=args.rollback)
     else:
         if args.report:
             report_path = Path(args.report)
