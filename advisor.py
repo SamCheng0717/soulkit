@@ -304,3 +304,102 @@ def generate_candidate(
             "expected_effect": "",
             "candidate_prompt": current_prompt,
         }
+
+
+# ── 主循环 ────────────────────────────────────────────────────────────────────
+MAX_RETRIES = 3
+HOLDOUT_PASS_THRESHOLD = 0.75
+
+
+def _load_cases() -> tuple[list[dict], list[dict]]:
+    all_cases = json.loads(CASES_PATH.read_text(encoding="utf-8")) if CASES_PATH.exists() else []
+    optimize = [c for c in all_cases if c.get("split") == "optimize"]
+    holdout  = [c for c in all_cases if c.get("split") == "holdout"]
+    return optimize, holdout
+
+
+def run_advisor(
+    report_path: Path,
+    extract_only: bool = False,
+    rollback: str = "",
+) -> dict:
+    if rollback:
+        rollback_version(rollback)
+        return {"action": "rolled_back", "version": rollback}
+
+    new_cases = extract_cases(report_path)
+    print(f"  → 新增测试用例 {len(new_cases)} 条")
+
+    if extract_only:
+        return {"action": "extracted", "new_cases": len(new_cases)}
+
+    report_text    = report_path.read_text(encoding="utf-8")
+    current_prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    feedback_text  = FEEDBACK_PATH.read_text(encoding="utf-8") if FEEDBACK_PATH.exists() else ""
+    optimize_cases, holdout_cases = _load_cases()
+
+    if not optimize_cases:
+        print("  → 优化集为空，跳过本轮优化")
+        return {"action": "skipped", "reason": "no_cases"}
+
+    failures = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"\n  [优化 {attempt}/{MAX_RETRIES}] 生成候选提示词...")
+        result = generate_candidate(
+            report_text, feedback_text, current_prompt, optimize_cases, failures
+        )
+        candidate = result.get("candidate_prompt", current_prompt)
+
+        print(f"  → 评估优化集（{len(optimize_cases)} 条）...")
+        opt_eval = evaluate_candidate(candidate, optimize_cases)
+        print(f"     优化集：{opt_eval['passed_count']}/{opt_eval['total']}")
+
+        if not opt_eval["passed"]:
+            failures = opt_eval["failures"]
+            print(f"     ✗ 优化集未通过，失败 {len(failures)} 条")
+            continue
+
+        print(f"  → 评估验证集（{len(holdout_cases)} 条）...")
+        if holdout_cases:
+            hold_eval = evaluate_candidate(candidate, holdout_cases)
+            hold_rate = hold_eval["passed_count"] / hold_eval["total"]
+            print(f"     验证集：{hold_eval['passed_count']}/{hold_eval['total']}（{hold_rate:.0%}）")
+            if hold_rate < HOLDOUT_PASS_THRESHOLD:
+                failures = hold_eval["failures"]
+                print(f"     ✗ 验证集通过率 {hold_rate:.0%} < {HOLDOUT_PASS_THRESHOLD:.0%}，重试")
+                continue
+            hold_result = f"{hold_eval['passed_count']}/{hold_eval['total']}"
+        else:
+            hold_result = "N/A（验证集为空）"
+
+        version = get_next_version()
+        publish_version(
+            candidate=candidate,
+            version=version,
+            change_info={
+                "module":      result.get("module", ""),
+                "reason":      result.get("reason", ""),
+                "opt_result":  f"{opt_eval['passed_count']}/{opt_eval['total']}",
+                "hold_result": hold_result,
+            }
+        )
+        print(f"  → 发布 {version} 成功！模块：{result.get('module')}")
+
+        if FEEDBACK_PATH.exists() and feedback_text.strip():
+            FEEDBACK_PATH.write_text("", encoding="utf-8")
+
+        return {
+            "action":      "published",
+            "version":     version,
+            "module":      result.get("module"),
+            "reason":      result.get("reason"),
+            "opt_result":  f"{opt_eval['passed_count']}/{opt_eval['total']}",
+            "hold_result": hold_result,
+        }
+
+    print(f"  → {MAX_RETRIES} 次重试全失败，本轮放弃")
+    return {
+        "action":   "failed",
+        "attempts": MAX_RETRIES,
+        "failures": failures or [],
+    }

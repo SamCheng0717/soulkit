@@ -122,3 +122,19 @@ def test_generate_candidate_returns_structure():
     assert "module" in result
     assert "reason" in result
     assert len(result["candidate_prompt"]) > 10
+
+
+def test_run_advisor_extract_only(tmp_path, monkeypatch):
+    import advisor
+    monkeypatch.setattr(advisor, "CASES_PATH", tmp_path / "cases.json")
+    monkeypatch.setattr(advisor, "FEEDBACK_PATH", tmp_path / "feedback.md")
+    (tmp_path / "cases.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "feedback.md").write_text("", encoding="utf-8")
+
+    report = tmp_path / "2026-04-27.md"
+    report.write_text(SAMPLE_REPORT, encoding="utf-8")
+
+    from advisor import run_advisor
+    result = run_advisor(report_path=report, extract_only=True)
+    assert result["action"] == "extracted"
+    assert result["new_cases"] >= 0
